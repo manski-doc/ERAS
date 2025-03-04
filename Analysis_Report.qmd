@@ -1,0 +1,384 @@
+---
+title: "C1380 Analysis Report"
+author:
+  - name: Sam Manski
+    email: manskisa@msu.edu
+    affiliations: 
+      - name: Michigan State University, Center for Statistical Training and Consulting
+  - name: Steven J. Pierce
+    orcid: 0000-0002-0679-3019
+    email: pierces1@msu.edu
+    affiliations: 
+      - name: Michigan State University, Center for Statistical Training and Consulting
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show Code"
+    toc: true
+    number-sections: true
+editor: visual
+---
+
+## Project Summary
+
+This project aims to compare the pain management effectiveness after lumpectomy using break surgery-specific Enhanced Recovery After Surgery (ERAS) protocol with or without Liposomal Bupivacaine (Exparel). Exparel is more expensive than Bupivacaine Hydrochloride (Control). While previous studies have shown "no significant difference" between Exparel and the Control, most previous studies have performed tests for a significant difference, which does not equate to showing that the two treatments are clinically equivalent. In order to show that Exparel and the Control are clinically equivalent in terms of pain management, we perform an equivalence test procedure on the difference in patient pain scores during a postop call (approximately POD 2) and a postop visit (approximately POD 10). We a priori set an equivalence margin of 2 points on the Numeric Rating Scale (NRS) based on prior studies that set the minimum clinically important difference in this range. The equivalence tests were significant at $\alpha = 0.05$ for both the postop call and visit and we conclude that Exparel and the Control are clinically equivalent in terms of pain management after lumpectomy.
+
+## Prerequisites
+
+This section loads necessary R packages and reads and cleans the raw project data. This section is included for reproducibility purposes.
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r}
+library(tidyverse)
+library(gt)
+library(naniar)
+library(TOSTER)
+library(kableExtra)
+```
+
+```{r}
+#| label: read_clean
+C1380_Data <- read_csv("Data/C1380_Data_4_23_2024.csv")
+#Rename variables
+names(C1380_Data) <- c("Patient_ID", "Group", "Surgery_Date", "Age",
+                       "Race_Ethnicity", "Hispanic_Ethnicity", "Gender",
+                       "Benign_vs_Malignant", "Lymph_Node", 
+                       "MME_Discharge", "Chronic_Opiod", "POD_Postop_Call", 
+                       "Pain_Scale_Postop_Call", "POD_Postop_Visit", 
+                       "Pain_Scale_Postop_Visit", "Side_Effects", 
+                       "Postop_ER", "ER_Reason", 
+                       "Intraop_Toradol", "Refills_Requested")
+
+#Set variables to factors and change levels to be more readable
+C1380_Data$Group <- as.factor(C1380_Data$Group)
+levels(C1380_Data$Group)[match("0=No Exparel", levels(C1380_Data$Group))]<- "Control"
+levels(C1380_Data$Group)[match("1=Exparel", levels(C1380_Data$Group))]<- "Exparel"
+
+C1380_Data$Race_Ethnicity <- as.factor(C1380_Data$Race_Ethnicity)
+levels(C1380_Data$Race_Ethnicity) <- gsub("\\d=", "", levels(C1380_Data$Race_Ethnicity))
+
+C1380_Data$Hispanic_Ethnicity <- as.factor(C1380_Data$Hispanic_Ethnicity)
+levels(C1380_Data$Hispanic_Ethnicity) <- gsub("\\d=", "", 
+                                              levels(C1380_Data$Hispanic_Ethnicity))
+
+C1380_Data$Gender <- as.factor(C1380_Data$Gender)
+C1380_Data$Benign_vs_Malignant <- as.factor(C1380_Data$Benign_vs_Malignant)
+C1380_Data$Lymph_Node <- as.factor(C1380_Data$Lymph_Node)
+C1380_Data$Chronic_Opiod <- as.factor(C1380_Data$Chronic_Opiod)
+levels(C1380_Data$Chronic_Opiod) <- c("No", "Yes")
+C1380_Data$Intraop_Toradol <- as.factor(C1380_Data$Intraop_Toradol)
+levels(C1380_Data$Intraop_Toradol) <- c("No", "Yes")
+C1380_Data$Refills_Requested <- as.factor(C1380_Data$Refills_Requested)
+levels(C1380_Data$Refills_Requested) <- c("No", "Yes")
+C1380_Data$Postop_ER <- as.factor(C1380_Data$Postop_ER)
+levels(C1380_Data$Postop_ER) <- c("No", "Yes")
+C1380_Data$MME_Discharge <- as.factor(C1380_Data$MME_Discharge)
+
+# Change "N/A" to NA and treat POD and Pain Scale variables as numeric
+C1380_Data$POD_Postop_Call[which(C1380_Data$POD_Postop_Call == "N/A")] <- NA
+C1380_Data$POD_Postop_Call <- as.numeric(C1380_Data$POD_Postop_Call)
+C1380_Data$Pain_Scale_Postop_Call[which(C1380_Data$Pain_Scale_Postop_Call == "N/A")] <- NA
+C1380_Data$Pain_Scale_Postop_Call <- as.numeric(C1380_Data$Pain_Scale_Postop_Call)
+
+C1380_Data$POD_Postop_Visit[which(C1380_Data$POD_Postop_Visit == "N/A")] <- NA
+C1380_Data$POD_Postop_Visit <- as.numeric(C1380_Data$POD_Postop_Visit)
+C1380_Data$Pain_Scale_Postop_Visit[which(C1380_Data$Pain_Scale_Postop_Visit == "N/A")] <- NA
+C1380_Data$Pain_Scale_Postop_Visit <- as.numeric(C1380_Data$Pain_Scale_Postop_Visit)
+```
+
+## Initial Data Analysis
+
+A key first step when performing data analysis is initial data analysis (IDA) including summarizing missing data and univariate descriptions of variables.
+
+### Missing Data
+
+We first summarize the missing data for our key outcome variables (pain scale at the postop call and visit) and the POD of the call and visit in @tbl-missing-data.
+
+```{r}
+#| label: tbl-missing-data
+#| tbl-cap: Summary of missingness for POD and Pain Scale during postop call and visit by group. 
+tab1 <- C1380_Data %>%
+  select(POD_Postop_Call, Pain_Scale_Postop_Call,  
+         POD_Postop_Visit, Pain_Scale_Postop_Visit) %>%  
+  miss_var_summary()%>%
+ mutate(pct_miss = round(pct_miss, digits = 2), 
+        variable = gsub("_", " ", variable))%>%
+  rename(pct_miss_all = pct_miss, n_miss_all = n_miss)
+
+tab2 <- C1380_Data %>% group_by(Group)%>%
+  select(POD_Postop_Call, Pain_Scale_Postop_Call,  
+         POD_Postop_Visit, Pain_Scale_Postop_Visit) %>%  
+  miss_var_summary() %>% 
+  mutate(pct_miss = round(pct_miss, digits = 2), 
+         variable = gsub("_", " ", variable)) %>% 
+  pivot_wider(names_from = Group, values_from = c(n_miss, pct_miss))
+
+tab3 <- merge(tab1, tab2, by = "variable")
+tab_out <- tab3[, c(1,2,5,4,3,7,6)]
+
+kableExtra::kable(tab_out, col.names = c("Variable", "All", "Control", 
+                                      "Exparel", "All", "Control", 
+                                      "Exparel"), 
+                  row.names = FALSE)%>%
+add_header_above(header = c(" " = 1, "Missing (Count)" = 3, "Missing (%)" = 3))
+
+```
+
+### Univariate Descriptions
+
+We further describe the observed data through univariate descriptions.
+
+```{r}
+categorical_vars <- c("Race_Ethnicity", "Hispanic_Ethnicity", "Gender",
+                      "Benign_vs_Malignant", "Lymph_Node", "Chronic_Opiod",
+                      "Postop_ER", "Intraop_Toradol", "Refills_Requested",
+                      "MME_Discharge")
+numeric_vars <- c("Age", "POD_Postop_Call", "Pain_Scale_Postop_Call",
+                  "POD_Postop_Visit", "Pain_Scale_Postop_Visit")
+summary(C1380_Data[,categorical_vars])
+summary(C1380_Data[,numeric_vars])
+```
+
+## Attrition Analysis
+
+Due to a high degree of missingness in the primary outcomes (pain scale on postop call and visit), it is important to assess whether missingness is related to the treatment or any other variables. We summarize the results of this attrition analysis here and include the code used to generate all presented results.
+
+We first conducted Chi Squared tests of independence to discern if treatment and missingness are independent for the pain scale responses for both the postop call and visit. Both tests were not significant at $\alpha = 0.05$ and we conclude that there is insufficient evidence to suggest missingness for pain scale scores and treatment are not independent. This means that the missingness does not vary significantly between treatment (Exparel) and control groups.
+
+```{r}
+#| label: chisq
+
+C1380_Data$Missing_Call_Pain <- as.factor(ifelse(is.na(C1380_Data$Pain_Scale_Postop_Call), "Yes", "No"))
+C1380_Data$Missing_Visit_Pain <- as.factor(ifelse(is.na(C1380_Data$Pain_Scale_Postop_Visit), "Yes", "No"))
+
+chisq.test(C1380_Data$Missing_Visit_Pain, C1380_Data$Group)
+chisq.test(C1380_Data$Missing_Call_Pain, C1380_Data$Group)
+```
+
+We then examine whether any other variables recorded during the study are significant predictors of missingness for pain scale during the postop call and visit. This was performed by fitting logistic regression models with the outcome as pain scale missing for postop call or visit and the predictor as one of Age, Benign vs Malignant status, Lymph Node, Chronic Opiod Use, and use of Intraop Toradol. The only regression coefficient that was significant at $\alpha = 0.05$ was Lymph Node for missing pain scale for postop call suggesting that those with SLNB Lymph Node were less likely to have missing values for pain score during the postop call. Further, we fit a logistic regression to determine if missing pain score for postop call was a significant predictor of missing pain score for the postop visit, and vice versa, which were not significant. The coefficient estimates and p-values for these regression models are presented in @tbl-predict-missing.
+
+We do not attempt to predict missingness using Race_Ethnicity, Hispanic_Ethnicity, Refills_Requested, MME_Discharge, or Postop_ER due to a lack of variation in the data (majority of data taking the same level).
+
+The attrition analysis suggests that missingness is not significantly different between groups and the missingness cannot be be predicted by other observed variables. This suggests that patients who do not have pain scores at the postop call or visit do not systematically differ from those who do have observed data.
+
+Limitation: We perform the desired equivalence tests on complete case data only. This is a limitation of the presented analysis as the sample size is reduced from the intended sample size. However, the attrition analysis suggests that the missignness is not related to other observed variables and likely does not affect the population of interest.
+
+```{r}
+#| label: tbl-predict-missing
+#| tbl-cap: Summary of logistic regression results to predict missing call/ visit pain scores from other observed variables. 
+call_drop_age <- glm(Missing_Call_Pain ~ Age, family = "binomial", 
+                     data = C1380_Data)
+call_drop_age_summary <-summary(call_drop_age)
+visit_drop_age <- glm(Missing_Visit_Pain ~ Age, 
+                      family = "binomial", data = C1380_Data)
+visit_drop_age_summary <-summary(visit_drop_age)
+drop_table <- data.frame(Coefficient = 
+                           dimnames(call_drop_age_summary$coefficients)[[1]],
+                                 Estimate_C = call_drop_age_summary$coefficients[,1],
+                                 P_Value_C = call_drop_age_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_age_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_age_summary$coefficients[,4])
+
+
+call_drop_BvM <- glm(Missing_Call_Pain ~ Benign_vs_Malignant, 
+                     family = "binomial", data = C1380_Data)
+call_drop_BvM_summary <-summary(call_drop_BvM)
+visit_drop_BvM <- glm(Missing_Visit_Pain ~ Benign_vs_Malignant, 
+                      family = "binomial", data = C1380_Data)
+visit_drop_BvM_summary <-summary(visit_drop_BvM)
+drop_table <- rbind(drop_table,data.frame(Coefficient = 
+                                            dimnames(call_drop_BvM_summary$coefficients)[[1]],
+                                 Estimate_C = call_drop_BvM_summary$coefficients[,1],
+                                 P_Value_C = call_drop_BvM_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_BvM_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_BvM_summary$coefficients[,4]))
+
+call_drop_Lymph_Node <- glm(Missing_Call_Pain ~ Lymph_Node, 
+                            family = "binomial", data = C1380_Data)
+call_drop_Lymph_Node_summary <-summary(call_drop_Lymph_Node)
+visit_drop_Lymph_Node <- glm(Missing_Visit_Pain ~ Lymph_Node, 
+                             family = "binomial", data = C1380_Data)
+visit_drop_Lymph_Node_summary <-summary(visit_drop_Lymph_Node)
+drop_table <- rbind(drop_table,data.frame(Coefficient = dimnames(call_drop_Lymph_Node_summary$coefficients)[[1]],
+                                 Estimate_C = call_drop_Lymph_Node_summary$coefficients[,1],
+                                 P_Value_C = call_drop_Lymph_Node_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_Lymph_Node_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_Lymph_Node_summary$coefficients[,4]))
+
+call_drop_Intraop_Toradol <- glm(Missing_Call_Pain ~ Intraop_Toradol, 
+                                 family = "binomial", data = C1380_Data)
+call_drop_Intraop_Toradol_summary <-summary(call_drop_Intraop_Toradol)
+visit_drop_Intraop_Toradol <- glm(Missing_Visit_Pain ~ Intraop_Toradol, 
+                                  family = "binomial", data = C1380_Data)
+visit_drop_Intraop_Toradol_summary <-summary(visit_drop_Intraop_Toradol)
+drop_table <- rbind(drop_table,data.frame(Coefficient = dimnames(call_drop_Intraop_Toradol_summary$coefficients)[[1]],
+                                 Estimate_C = call_drop_Intraop_Toradol_summary$coefficients[,1],
+                                 P_Value_C = call_drop_Intraop_Toradol_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_Intraop_Toradol_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_Intraop_Toradol_summary$coefficients[,4]))
+
+call_drop_Chronic_Opiod <- glm(Missing_Call_Pain ~ Chronic_Opiod, 
+                               family = "binomial", data = C1380_Data)
+call_drop_Chronic_Opiod_summary <-summary(call_drop_Chronic_Opiod)
+visit_drop_Chronic_Opiod <- glm(Missing_Visit_Pain ~ Chronic_Opiod, 
+                                family = "binomial", data = C1380_Data)
+visit_drop_Chronic_Opiod_summary <-summary(visit_drop_Chronic_Opiod)
+drop_table <- rbind(drop_table,data.frame(Coefficient = 
+                                            dimnames(call_drop_Chronic_Opiod_summary$coefficients)[[1]],
+                                 Estimate_C = call_drop_Chronic_Opiod_summary$coefficients[,1],
+                                 P_Value_C = call_drop_Chronic_Opiod_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_Chronic_Opiod_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_Chronic_Opiod_summary$coefficients[,4]))
+
+call_drop_Missing_Visit_Pain <- glm(Missing_Call_Pain ~ Missing_Visit_Pain, 
+                                    family = "binomial", data = C1380_Data)
+call_drop_Missing_Visit_Pain_summary <-summary(call_drop_Missing_Visit_Pain)
+visit_drop_Missing_Call_Pain <- glm(Missing_Visit_Pain ~ Missing_Call_Pain, 
+                                    family = "binomial", data = C1380_Data)
+visit_drop_Missing_Call_Pain_summary <-summary(visit_drop_Missing_Call_Pain)
+drop_table <- rbind(drop_table,data.frame(Coefficient = c("(Intercept)", "Missing_Other_PainYes"),
+                                 Estimate_C = call_drop_Missing_Visit_Pain_summary$coefficients[,1],
+                                 P_Value_C = call_drop_Missing_Visit_Pain_summary$coefficients[,4],
+                                  Estimate_V = visit_drop_Missing_Call_Pain_summary$coefficients[,1],
+                                 P_Value_V = visit_drop_Missing_Call_Pain_summary$coefficients[,4]))
+
+kableExtra::kable(drop_table, row.names = FALSE, 
+                  col.names = c("Coefficient", "Estimate", "P-Value", 
+                                "Estimate", "P-Value")) %>%
+add_header_above(header = c(" " = 1, "Missing Call Pain Score"=2, 
+                            "Missing Visit Pain Score" = 2))%>%
+  pack_rows("Age", 1,2) %>%
+  pack_rows("Benign Vs Malignant (Reference Level = Benign)", 3,4)%>%
+  pack_rows("Lymph Node (Reference Level = None)", 5,6)%>%
+  pack_rows("Intraop Toradol (Reference Level = No)", 7,8)%>%
+  pack_rows("Chronic Opiod (Reference Level = No)", 9,10)%>%
+  pack_rows("Missing Other Pain Score (Reference Level = No)", 11,12)
+```
+
+## Equivalence Tests
+
+Our primary analysis is an equivalence test to determine whether Liposomal Bupivacaine (Exparel) and Bupivacaine Hydrochloride (Control) are clinically equivalent in terms of postoperative pain. We perform two separate equivalence tests, one for pain reported during the postop call (approximately POD 2) and one for pain reported during the postop visit (approximately POD 9). Prior to data collection, we defined a margin of equivalence of 2 points to be clinically relevant based on prior studies investigating pain scale differences and the minimum clinically important difference for the numeric rating scale (cite these).
+
+Due to variation in POD of the postop call and visit, we first perform a t-test for the difference in means for POD for the postop call between treatment and control groups. We do this to ensure that the POD for the call and visit to not differ significantly between treatment and control groups, which could impact the resulting pain scores. These tests were not significant at $\alpha = 0.05$ and we conclude that there is insufficient evidence to suggest that POD of the call and visit differed between groups (see below). We further display the overall and group mean POD of the postop call and visit in the table (@tbl-POD-summary) below.
+
+```{r}
+#| label: tbl-POD-summary
+#| tbl-cap: Summary of mean POD for postop call and visit by group. 
+
+t.test(POD_Postop_Visit ~ Group, data = C1380_Data)
+t.test(POD_Postop_Call ~ Group, data = C1380_Data)
+
+POD_all <- C1380_Data %>% summarize(type = "All", mean_POD_call = round(mean(POD_Postop_Call, na.rm = TRUE), digits = 2), 
+                                    mean_POD_visit = round(mean(POD_Postop_Visit, 
+                                                                na.rm = TRUE), digits = 2))
+POD_exp <- C1380_Data %>% filter(Group == "Exparel") %>% 
+  summarize(type = "Exparel", mean_POD_call = round(mean(POD_Postop_Call, 
+                                                         na.rm = TRUE), digits = 2), 
+            mean_POD_visit = round(mean(POD_Postop_Visit, 
+                                        na.rm = TRUE), digits = 2))
+POD_control <- C1380_Data %>% filter(Group == "Control") %>%
+  summarize(type = "Control", mean_POD_call = round(mean(POD_Postop_Call, 
+                                                         na.rm = TRUE), digits = 2), 
+            mean_POD_visit = round(mean(POD_Postop_Visit, 
+                                        na.rm = TRUE), digits = 2))
+
+POD_summary <- rbind(POD_all, POD_exp, POD_control)
+kableExtra::kable(POD_summary, col.names = c("Group", "Mean POD Call", 
+                                             "Mean POD Visit"))
+
+```
+
+After confirming that the POD for the call and visit are comparable between groups, we perform the intended equivalence tests. The hypotheses for these equivalence tests are
+
+$H_0$: Mean pain score during the Postop Call for the Exparel and Control groups differ beyond a clinically relevant margin.
+
+$H_1$: Mean pain score during the Postop Call for the Exparel and Control groups are clinically equivalent.
+
+and
+
+$H_0$: Mean pain score during the Postop Visit for the Exparel and Control groups differ beyond a clinically relevant margin.
+
+$H_1$: Mean pain score during the Postop Visit for the Exparel and Control groups are clinically equivalent.
+
+We use a margin of equivalence of 2 points and $\alpha = 0.05$ to perform the two-sided equivalence tests. We present groupwise mean and standard deviation for pain scale (@tbl-Pain-Summary) and the results of these tests (@tbl-equiv-tests) below.
+
+```{r}
+#| tbl-cap: Pain Scale Summary
+#| label: tbl-Pain-Summary
+Pain_Scale_all <- C1380_Data %>% summarize(type = "All", 
+                                           mean_Pain_Scale_call = round(mean(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_call = round(sd(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            mean_Pain_Scale_visit = round(mean(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_visit = round(sd(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2))
+Pain_Scale_exp <- C1380_Data %>% filter(Group == "Exparel") %>% 
+  summarize(type = "Exparel", mean_Pain_Scale_call = round(mean(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_call = round(sd(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            mean_Pain_Scale_visit = round(mean(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_visit = round(sd(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2))
+Pain_Scale_control <- C1380_Data %>% filter(Group == "Control") %>%
+  summarize(type = "Control", 
+            mean_Pain_Scale_call = round(mean(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_call = round(sd(Pain_Scale_Postop_Call, na.rm = TRUE), digits = 2),
+            mean_Pain_Scale_visit = round(mean(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2),
+            sd_Pain_Scale_visit = round(sd(Pain_Scale_Postop_Visit, na.rm = TRUE), digits = 2))
+
+Pain_Scale_summary <- rbind(Pain_Scale_all, Pain_Scale_exp, Pain_Scale_control)
+
+kableExtra::kable(Pain_Scale_summary, col.names = c("Group", "Mean Pain Scale Call",
+                                                    "SD Pain Scale Call",
+                                             "Mean Pain Scale Visit", 
+                                             "SD Pain Scale Visit"))
+```
+
+```{r}
+#| label: tbl-equiv-tests
+#| tbl-cap: Equivalence test results comparing pain score at postop call and visit between Exparel and Control. Results include the t test statistic and p-value for each test along with estimates and 90% confidence intervals for the mean difference in pain between the Exparel and Control groups both on the raw pain scale and adjusted Hedges's g effect size scale. 
+
+visit_test1 <- t_TOST(formula = Pain_Scale_Postop_Visit ~ Group, 
+                      data = C1380_Data, eqb = 2, hypothesis = "EQU")
+
+call_test1 <- t_TOST(formula = Pain_Scale_Postop_Call ~ Group, 
+                     data = C1380_Data, eqb = 2, hypothesis = "EQU")
+
+
+results_table <- data.frame(t = c(3.42, 4.13), p = c("<0.001", "<0.001"), 
+                            est1 = c(-0.039, -0.246), CI1 = c("[-1.001, 0.923]", "[-0.958, 0.467]"), 
+                            est2 = c(-0.019, -0.141), CI2 = c("[-0.465, 0.428]", "[-0.541, 0.261]"))
+rownames(results_table) = c("Postop Call", "Postop Visit")
+kableExtra::kable(results_table, col.names = c("Test Statistic (t)", "P-value",
+                  "Estimate", "90%CI", "Estimate", "90% CI"), row.names = TRUE)%>%
+add_header_above(header = c(" " = 1, "Equivalence Test"=2, "Raw Mean Pain Score Difference" = 2, "Effect Size (Hedges's g)" = 2))
+```
+
+The results show that for both the postop call and visit, the mean pain scores between the groups were clinically equivalent. Point estimates and confidence intervals show that the difference in mean pain between the groups is near zero and the confidence intervals are completely contained within the equivalence margin (\[-2,2\]) for both the postop call and visit. The effect size estimate and confidence interval give a standardized interpretation of these results, and similarly show clinical equivalence between the two groups, where the standardized equivalence bounds are \[-0.92, 0.92\].
+
+We can visualize these results by plotting together the expected distribution of the mean difference and effect size, the confidence interval, and the equivalence bounds (@fig-call1, @fig-call2, @fig-visit1 and @fig-visit2). We see that in all cases, the point estimate for the difference in means is near zero and the 90% and 95% confidence intervals are well within the equivalence bounds.
+
+```{r}
+#| label: fig-call1
+#| fig-cap: Density plots with 90% and 95% intervals for the mean difference in pain at the postop call on raw pain score scale. 
+plot(call_test1, type = "cd", ci_shades = c(0.9, 0.95), estimates = "raw")
+```
+
+```{r}
+#| label: fig-call2
+#| fig-cap: Density plots with 90% and 95% intervals for the mean difference in pain at the postop call on a standardized scale (Hedges's g). 
+plot(call_test1, type = "cd", ci_shades = c(0.9, 0.95), estimates = "SMD")
+```
+
+```{r}
+#| label: fig-visit1
+#| fig-cap: Density plots with 90% and 95% intervals for the mean difference in pain at the postop visit on raw pain score scale. 
+plot(visit_test1, type = "cd", ci_shades = c(0.9, 0.95), estimates = "raw")
+```
+
+```{r}
+#| label: fig-visit2
+#| fig-cap: Density plots with 90% and 95% intervals for the mean difference in pain at the postop visit on a standardized scale (Hedges's g). 
+plot(visit_test1, type = "cd", ci_shades = c(0.9, 0.95), estimates = "SMD")
+```
